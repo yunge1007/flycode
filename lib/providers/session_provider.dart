@@ -2,6 +2,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../service/api/models/message.dart';
 import '../service/api/models/parts.dart';
 import '../service/api/session_api.dart';
+import 'current_directory_provider.dart';
 
 part 'session_provider.g.dart';
 
@@ -128,8 +129,12 @@ final class MessageListStateReducer {
 class SessionMessagesNotifier extends _$SessionMessagesNotifier {
   @override
   Future<List<MessageWithParts>> build(String sessionID) async {
+    final directory = ref.watch(currentDirectoryProvider);
     final api = await ref.watch(sessionApiProvider.future);
-    final messages = await api.getSessionMessages(sessionID);
+    final messages = await api.getSessionMessages(
+      sessionID,
+      directory: directory,
+    );
     return _normalizeMessages(messages);
   }
 
@@ -203,8 +208,12 @@ String _messageId(MessageWithParts m) {
 class SubSessionMessagesNotifier extends _$SubSessionMessagesNotifier {
   @override
   Future<List<MessageWithParts>> build(String sessionID) async {
+    final directory = ref.watch(currentDirectoryProvider);
     final api = await ref.watch(sessionApiProvider.future);
-    final messages = await api.getSessionMessages(sessionID);
+    final messages = await api.getSessionMessages(
+      sessionID,
+      directory: directory,
+    );
     return _normalizeMessages(messages);
   }
 
