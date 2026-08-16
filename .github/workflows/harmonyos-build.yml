@@ -2,8 +2,7 @@ name: HarmonyOS HAP Build
 
 on:
   push:
-    branches:
-      - harmonyos
+    branches: [harmonyos]
   workflow_dispatch:
 
 concurrency:
@@ -17,28 +16,21 @@ jobs:
   build-hap:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
-
     env:
       PUB_HOSTED_URL: https://pub.flutter-io.cn
       FLUTTER_STORAGE_BASE_URL: https://storage.flutter-io.cn
       FLUTTER_GIT_URL: https://gitcode.com/CPF-Flutter/flutter_flutter.git
-
     steps:
-      - name: Checkout FlyCode
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
       - name: Set up HarmonyOS command line tools
         uses: ErBWs/setup-ohos@v1
         with:
           version: latest
           cache: true
-
       - name: Set up Flutter for OpenHarmony 3.41.9
         shell: bash
         run: |
@@ -46,85 +38,61 @@ jobs:
           git clone --depth 1 --branch oh-3.41.9-dev https://gitcode.com/CPF-Flutter/flutter_flutter.git "$GITHUB_WORKSPACE/flutter-ohos"
           git -C "$GITHUB_WORKSPACE/flutter-ohos" tag --force 3.41.9 HEAD
           echo "$GITHUB_WORKSPACE/flutter-ohos/bin" >> "$GITHUB_PATH"
-
       - name: Configure HarmonyOS npm registry
-        shell: bash
         run: |
           cat > "$HOME/.npmrc" <<'EOF'
           registry=https://repo.huaweicloud.com/repository/npm/
           @ohos:registry=https://repo.harmonyos.com/npm/
           strict-ssl=true
           EOF
-
-      - name: Verify HarmonyOS Flutter toolchain
-        shell: bash
+      - name: Verify toolchain
         run: |
-          set -euxo pipefail
           flutter --version
           test -d "$HOS_SDK_HOME"
-
       - name: Generate OHOS project scaffold
-        shell: bash
-        run: |
-          set -euxo pipefail
-          flutter create --platforms ohos --org io.flycode .
-
+        run: flutter create --platforms ohos --org io.flycode .
       - name: Target HarmonyOS 6.1.1 API 24
         shell: bash
         run: |
-          set -euxo pipefail
           python3 - <<'PY'
           from pathlib import Path
           import re
-
-          p = Path('ohos/build-profile.json5')
-          s = p.read_text()
-          print('--- build-profile before ---')
-          print(s)
-
-          def replace_or_add(text, key, value):
-              pattern = rf'(["\']?{key}["\']?\s*:\s*)(["\']?[^,\n}}]+["\']?)'
-              if re.search(pattern, text):
-                  return re.sub(pattern, rf'\1"{value}"', text, count=1)
-              marker = re.search(r'(["\']?name["\']?\s*:\s*["\']default["\']\s*,)', text)
-              if not marker:
-                  raise RuntimeError(f'Could not locate default product to add {key}')
-              pos = marker.end()
-              return text[:pos] + f'\n        "{key}": "{value}",' + text[pos:]
-
-          for key in ('compileSdkVersion', 'compatibleSdkVersion', 'targetSdkVersion'):
-              s = replace_or_add(s, key, '6.1.1(24)')
-
+          p=Path('ohos/build-profile.json5')
+          s=p.read_text()
+          for k in ('compileSdkVersion','compatibleSdkVersion','targetSdkVersion'):
+              pat=rf'(["\']?{k}["\']?\s*:\s*)(["\']?[^,\n}}]+["\']?)'
+              if re.search(pat,s): s=re.sub(pat,rf'\1"6.1.1(24)"',s,count=1)
+              else:
+                  m=re.search(r'(["\']?name["\']?\s*:\s*["\']default["\']\s*,)',s)
+                  s=s[:m.end()]+f'\n        "{k}": "6.1.1(24)",'+s[m.end():]
           p.write_text(s)
-          print('--- build-profile after ---')
           print(s)
           PY
-
       - name: Resolve Dart dependencies
+        run: flutter pub get
+      - name: Inspect Flutter OHOS Autofill integration
         shell: bash
         run: |
           set -euxo pipefail
-          flutter pub get
-
+          cd ohos
+          ohpm install
+          HELPER=$(find oh_modules -path '*flutter_ohos*/src/main/ets/plugin/editing/OhosAutoFillHelper.ets' -print -quit)
+          test -n "$HELPER"
+          echo "HELPER=$HELPER"
+          echo '===== OhosAutoFillHelper.ets ====='
+          sed -n '1,680p' "$HELPER"
+          echo '===== references ====='
+          grep -R -n -E 'OhosAutoFillHelper|ohosAutoFillHelper|autoFillHelper' "$(dirname "$HELPER")"/../.. | head -200 || true
       - name: Build ARM64 release HAP
-        shell: bash
-        run: |
-          set -euxo pipefail
-          flutter build hap --release --target-platform ohos-arm64
-
+        run: flutter build hap --release --target-platform ohos-arm64
       - name: Locate HAP
         if: always()
-        shell: bash
-        run: |
-          find ohos -type f \( -name '*.hap' -o -name '*.app' \) -print 2>/dev/null || true
-
+        run: find ohos -type f \( -name '*.hap' -o -name '*.app' \) -print 2>/dev/null || true
       - name: Upload HAP artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: flycode-harmonyos-arm64
-          path: |
-            ohos/entry/build/default/outputs/default/*.hap
-            ohos/entry/build/default/outputs/**/*.hap
+          path: ohos/entry/build/default/outputs/**/*.hap
           if-no-files-found: error
           retention-days: 30
