@@ -115,9 +115,6 @@ jobs:
                   if member.name == target:
                       text = data.decode('utf-8')
                       before = text
-
-                      # The 3.41.9 beta embedding references newer strongly typed
-                      # Autofill declarations than the current HarmonyOS SDK exports.
                       type_map = {
                           'autoFillManager.AutoFillType': 'number',
                           'autoFillManager.ViewData': 'OhosViewData',
@@ -129,7 +126,6 @@ jobs:
                       }
                       for old, new in type_map.items():
                           text = text.replace(old, new)
-
                       text = text.replace(
                           'autoFillManager.requestAutoFill(',
                           '(autoFillManager as ESObject).requestAutoFill(',
@@ -138,15 +134,12 @@ jobs:
                           'autoFillManager.requestAutoSave(',
                           '(autoFillManager as ESObject).requestAutoSave(',
                       )
-
                       if text == before:
                           raise RuntimeError('Autofill helper found but no compatibility edits were applied')
                       data = text.encode('utf-8')
                       member.size = len(data)
                       patched = True
                       print('Patched', target)
-                      print('Remaining typed autoFillManager references:', text.count('autoFillManager.'))
-
                   members.append((member, data))
 
           if not patched:
@@ -161,7 +154,6 @@ jobs:
                       dst.addfile(member)
           tmp.replace(har)
 
-          # Verify the patched member can be read back from the HAR.
           with tarfile.open(har, 'r:gz') as check:
               text = check.extractfile(target).read().decode('utf-8')
               assert 'autoFillManager.AutoFillType' not in text
@@ -169,18 +161,27 @@ jobs:
               print('Autofill HAR patch verified')
           PY
 
-      - name: Build ARM64 release HAP
-        run: flutter build hap --release --target-platform ohos-arm64
+      - name: Build unsigned ARM64 release HAP
+        run: flutter build hap --release --no-codesign --target-platform ohos-arm64
+
+      - name: Prepare HAP artifact
+        shell: bash
+        run: |
+          set -euxo pipefail
+          HAP="ohos/entry/build/default/outputs/default/entry-default-unsigned.hap"
+          test -f "$HAP"
+          mkdir -p dist
+          cp "$HAP" dist/flycode-harmonyos-arm64-unsigned.hap
+          ls -lh dist/flycode-harmonyos-arm64-unsigned.hap
 
       - name: Locate HAP
         if: always()
-        run: find ohos -type f \( -name '*.hap' -o -name '*.app' \) -print 2>/dev/null || true
+        run: find ohos dist -type f \( -name '*.hap' -o -name '*.app' \) -print 2>/dev/null || true
 
       - name: Upload HAP artifact
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: flycode-harmonyos-arm64
-          path: ohos/entry/build/default/outputs/**/*.hap
+          name: flycode-harmonyos-arm64-unsigned
+          path: dist/flycode-harmonyos-arm64-unsigned.hap
           if-no-files-found: error
           retention-days: 30
