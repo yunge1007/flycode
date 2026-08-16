@@ -64,6 +64,57 @@ jobs:
       - name: Generate OHOS project scaffold
         run: flutter create --platforms ohos --org io.flycode .
 
+      - name: Embed FlyCode icon and configure HarmonyOS permissions
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ICON_SOURCE="assets/app_icon/harmony_icon.jpg"
+          test -f "$ICON_SOURCE"
+          mkdir -p ohos/AppScope/resources/base/media
+          mkdir -p ohos/entry/src/main/resources/base/media
+          cp "$ICON_SOURCE" ohos/AppScope/resources/base/media/harmony_icon.jpg
+          cp "$ICON_SOURCE" ohos/entry/src/main/resources/base/media/harmony_icon.jpg
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          app = Path('ohos/AppScope/app.json5')
+          s = app.read_text()
+          s = re.sub(r'(["\']?icon["\']?\s*:\s*)["\'][^"\']+["\']', r'\1"$media:harmony_icon"', s, count=1)
+          if 'distributedNotificationEnabled' in s:
+              s = re.sub(r'(["\']?distributedNotificationEnabled["\']?\s*:\s*)(true|false)', r'\1false', s)
+          app.write_text(s)
+          print(app.read_text())
+
+          module = Path('ohos/entry/src/main/module.json5')
+          s = module.read_text()
+          s = re.sub(r'(["\']?icon["\']?\s*:\s*)["\'][^"\']+["\']', r'\1"$media:harmony_icon"', s, count=1)
+          s = re.sub(r'(["\']?startWindowIcon["\']?\s*:\s*)["\'][^"\']+["\']', r'\1"$media:harmony_icon"', s, count=1)
+
+          if 'ohos.permission.INTERNET' not in s:
+              m = re.search(r'(["\']?requestPermissions["\']?\s*:\s*\[)(.*?)(\])', s, re.S)
+              perm = '{ "name": "ohos.permission.INTERNET" }'
+              if m:
+                  body = m.group(2).rstrip()
+                  if body and not body.rstrip().endswith(','):
+                      body += ','
+                  body += '\n      ' + perm + '\n    '
+                  s = s[:m.start()] + m.group(1) + body + m.group(3) + s[m.end():]
+              else:
+                  outer_close = s.rfind('}')
+                  module_close = s.rfind('}', 0, outer_close)
+                  if module_close < 0:
+                      raise RuntimeError('Cannot locate module object')
+                  prefix = s[:module_close].rstrip()
+                  if not prefix.endswith(','):
+                      prefix += ','
+                  addition = '\n    "requestPermissions": [\n      ' + perm + '\n    ]\n  '
+                  s = prefix + addition + s[module_close:]
+          module.write_text(s)
+          print(module.read_text())
+          PY
+
       - name: Target HarmonyOS 6.1.1 API 24
         shell: bash
         run: |
