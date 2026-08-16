@@ -130,30 +130,8 @@ jobs:
       - name: Resolve Dart dependencies
         run: flutter pub get
 
-      - name: Patch HarmonyOS chat loading stability
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          p = Path('lib/providers/session_provider.dart')
-          s = p.read_text()
-          needle = '      directory: directory,\n    );'
-          replacement = '      directory: directory,\n      limit: 100,\n    );'
-          count = s.count(needle)
-          if count < 2:
-              raise RuntimeError(f'Expected at least two session message calls, found {count}')
-          p.write_text(s.replace(needle, replacement, 2))
-          h = Path('lib/providers/global_event/handlers.dart')
-          hs = h.read_text()
-          pattern = re.compile(r"    if \(payload is! EventSessionCreated &&\n        payload is! EventSessionUpdated &&\n        payload is! EventSessionDeleted\) \{\n      return;\n    \}\n\n    ref\.invalidate\(sessionsProvider\);\n    ref\.invalidate\(allSessionsProvider\);\n")
-          replacement_handler = "    // Avoid an invalidation loop while an active conversation emits session.updated.\n    if (payload is EventSessionUpdated) {\n      return;\n    }\n    if (payload is! EventSessionCreated && payload is! EventSessionDeleted) {\n      return;\n    }\n\n    ref.invalidate(sessionsProvider);\n    ref.invalidate(allSessionsProvider);\n"
-          hs2, replaced = pattern.subn(replacement_handler, hs, count=1)
-          if replaced != 1:
-              raise RuntimeError(f'Expected one session invalidation block, replaced {replaced}')
-          h.write_text(hs2)
-          print('Applied chat stability patches')
-          PY
+      - name: Patch HarmonyOS and OpenCode message compatibility
+        run: python3 tool/ohos_compat_patch.py
 
       - name: Precache OHOS release engine
         shell: bash
@@ -229,7 +207,7 @@ jobs:
           with zipfile.ZipFile(hap) as z:
               module = json.loads(z.read('module.json'))
               names = set(z.namelist())
-              assert module['app']['versionCode'] == 5, module['app']
+              assert module['app']['versionCode'] == 6, module['app']
               assert module['app']['icon'] == '$media:app_icon', module['app']
               ability = module['module']['abilities'][0]
               assert ability['icon'] == '$media:icon', ability
@@ -248,14 +226,14 @@ jobs:
           set -euxo pipefail
           HAP="ohos/entry/build/default/outputs/default/entry-default-unsigned.hap"
           mkdir -p dist
-          cp "$HAP" dist/FlyCode-HarmonyOS-v1.1.0-build5-chat-icon-fix-arm64-unsigned.hap
-          sha256sum dist/FlyCode-HarmonyOS-v1.1.0-build5-chat-icon-fix-arm64-unsigned.hap
-          ls -lh dist/FlyCode-HarmonyOS-v1.1.0-build5-chat-icon-fix-arm64-unsigned.hap
+          cp "$HAP" dist/FlyCode-HarmonyOS-v1.1.0-build6-compat-arm64-unsigned.hap
+          sha256sum dist/FlyCode-HarmonyOS-v1.1.0-build6-compat-arm64-unsigned.hap
+          ls -lh dist/FlyCode-HarmonyOS-v1.1.0-build6-compat-arm64-unsigned.hap
 
       - name: Upload HAP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flycode-harmonyos-build5-chat-icon-fix
-          path: dist/FlyCode-HarmonyOS-v1.1.0-build5-chat-icon-fix-arm64-unsigned.hap
+          name: flycode-harmonyos-build6-compat
+          path: dist/FlyCode-HarmonyOS-v1.1.0-build6-compat-arm64-unsigned.hap
           if-no-files-found: error
           retention-days: 30
