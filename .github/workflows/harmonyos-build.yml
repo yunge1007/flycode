@@ -17,6 +17,7 @@ jobs:
     env:
       PUB_HOSTED_URL: https://pub.flutter-io.cn
       FLUTTER_STORAGE_BASE_URL: https://storage.flutter-io.cn
+      FLUTTER_GIT_URL: https://gitcode.com/CPF-Flutter/flutter_flutter.git
 
     steps:
       - name: Checkout FlyCode
@@ -38,7 +39,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          git clone --depth 1 --branch oh-3.41.9-dev https://gitcode.com/CPF-Flutter/flutter_flutter.git "$GITHUB_WORKSPACE/flutter-ohos"
+          git clone --branch oh-3.41.9-dev https://gitcode.com/CPF-Flutter/flutter_flutter.git "$GITHUB_WORKSPACE/flutter-ohos"
+          git -C "$GITHUB_WORKSPACE/flutter-ohos" tag --force 3.41.9 HEAD
           echo "$GITHUB_WORKSPACE/flutter-ohos/bin" >> "$GITHUB_PATH"
 
       - name: Configure HarmonyOS npm registry
@@ -56,7 +58,7 @@ jobs:
           set -euxo pipefail
           flutter --version
           flutter doctor -v || true
-          env | sort | grep -E 'OHOS|HARMONY|DEVECO|TOOL_HOME|SDK' || true
+          env | sort | grep -E 'OHOS|HARMONY|DEVECO|TOOL_HOME|SDK|FLUTTER' || true
 
       - name: Generate OHOS project scaffold
         shell: bash
