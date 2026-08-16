@@ -59,26 +59,22 @@ jobs:
       - name: Generate OHOS project scaffold
         run: flutter create --platforms ohos --org io.flycode .
 
-      - name: Embed PNG launcher icon and configure permissions
+      - name: Embed verified PNG launcher icon and configure permissions
         shell: bash
         run: |
           set -euxo pipefail
-          test -f assets/app_icon/harmony_icon.jpg
+          test -f assets/app_icon/harmony_icon.svg
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends librsvg2-bin
+          rsvg-convert -w 512 -h 512 assets/app_icon/harmony_icon.svg -o /tmp/flycode_app_icon.png
+          file /tmp/flycode_app_icon.png
+          test -s /tmp/flycode_app_icon.png
+          cp /tmp/flycode_app_icon.png ohos/AppScope/resources/base/media/app_icon.png
+          cp /tmp/flycode_app_icon.png ohos/entry/src/main/resources/base/media/icon.png
 
-          python3 -c 'from PIL import Image' || python3 -m pip install --user pillow
           python3 - <<'PY'
           from pathlib import Path
-          from PIL import Image
           import re
-
-          src = Path('assets/app_icon/harmony_icon.jpg')
-          generated = Path('/tmp/flycode_app_icon.png')
-          Image.open(src).convert('RGBA').resize((512, 512), Image.Resampling.LANCZOS).save(generated, 'PNG', optimize=True)
-
-          app_icon = Path('ohos/AppScope/resources/base/media/app_icon.png')
-          entry_icon = Path('ohos/entry/src/main/resources/base/media/icon.png')
-          app_icon.write_bytes(generated.read_bytes())
-          entry_icon.write_bytes(generated.read_bytes())
 
           app = Path('ohos/AppScope/app.json5')
           s = app.read_text()
@@ -127,7 +123,6 @@ jobs:
           module.write_text(s)
           print(app.read_text())
           print(module.read_text())
-          print('PNG icon bytes:', generated.stat().st_size)
           PY
 
       - name: Target HarmonyOS 6.1.1 API 24
@@ -155,11 +150,12 @@ jobs:
       - name: Resolve Dart dependencies
         run: flutter pub get
 
-      - name: Limit initial HarmonyOS message history
+      - name: Patch HarmonyOS chat loading stability
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
+
           p = Path('lib/providers/session_provider.dart')
           s = p.read_text()
           needle = '      directory: directory,\n    );'
@@ -169,7 +165,35 @@ jobs:
               raise RuntimeError(f'Expected at least two session message calls, found {count}')
           s = s.replace(needle, replacement, 2)
           p.write_text(s)
-          print('Applied message history limit to', 2, 'providers')
+
+          h = Path('lib/providers/global_event/handlers.dart')
+          hs = h.read_text()
+          old = '''    if (payload is! EventSessionCreated &&
+        payload is! EventSessionUpdated &&
+        payload is! EventSessionDeleted) {
+      return;
+    }
+
+    ref.invalidate(sessionsProvider);
+    ref.invalidate(allSessionsProvider);
+'''
+          new = '''    // session.updated can fire repeatedly while a conversation is streaming.
+    // Re-invalidating the root session list on every update can keep the chat
+    // bootstrap in AsyncLoading forever on slower mobile/OHOS clients.
+    if (payload is EventSessionUpdated) {
+      return;
+    }
+    if (payload is! EventSessionCreated && payload is! EventSessionDeleted) {
+      return;
+    }
+
+    ref.invalidate(sessionsProvider);
+    ref.invalidate(allSessionsProvider);
+'''
+          if old not in hs:
+              raise RuntimeError('Session update invalidation block not found')
+          h.write_text(hs.replace(old, new, 1))
+          print('Applied 100-message initial limit and disabled session.updated refresh loop')
           PY
 
       - name: Precache OHOS release engine
@@ -274,10 +298,11 @@ jobs:
               assert 'resources/base/media/icon.png' in names
               app_icon = z.read('resources/base/media/app_icon.png')
               entry_icon = z.read('resources/base/media/icon.png')
-              assert hashlib.sha256(app_icon).digest() == hashlib.sha256(expected_icon).digest()
-              assert hashlib.sha256(entry_icon).digest() == hashlib.sha256(expected_icon).digest()
+              expected_hash = hashlib.sha256(expected_icon).hexdigest()
+              assert hashlib.sha256(app_icon).hexdigest() == expected_hash
+              assert hashlib.sha256(entry_icon).hexdigest() == expected_hash
               print(json.dumps(module, ensure_ascii=False, indent=2))
-              print('Verified icon SHA256:', hashlib.sha256(expected_icon).hexdigest())
+              print('Verified packaged launcher icon SHA256:', expected_hash)
           PY
 
       - name: Prepare HAP artifact
@@ -286,14 +311,14 @@ jobs:
           set -euxo pipefail
           HAP="ohos/entry/build/default/outputs/default/entry-default-unsigned.hap"
           mkdir -p dist
-          cp "$HAP" dist/FlyCode-HarmonyOS-v1.1.0-vc5-arm64-unsigned.hap
-          sha256sum dist/FlyCode-HarmonyOS-v1.1.0-vc5-arm64-unsigned.hap
-          ls -lh dist/FlyCode-HarmonyOS-v1.1.0-vc5-arm64-unsigned.hap
+          cp "$HAP" dist/FlyCode-HarmonyOS-v1.1.0-build5-chat-icon-fix-arm64-unsigned.hap
+          sha256sum dist/FlyCode-HarmonyOS-v1.1.0-build5-chat-icon-fix-arm64-unsigned.hap
+          ls -lh dist/FlyCode-HarmonyOS-v1.1.0-build5-chat-icon-fix-arm64-unsigned.hap
 
       - name: Upload HAP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flycode-harmonyos-vc5-unsigned
-          path: dist/FlyCode-HarmonyOS-v1.1.0-vc5-arm64-unsigned.hap
+          name: flycode-harmonyos-build5-chat-icon-fix
+          path: dist/FlyCode-HarmonyOS-v1.1.0-build5-chat-icon-fix-arm64-unsigned.hap
           if-no-files-found: error
           retention-days: 30
