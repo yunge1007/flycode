@@ -19,16 +19,11 @@ dependencies:
   riverpod_annotation: ^4.0.2
   go_router: ^17.1.0
   http: ^1.6.0
-  # HarmonyOS/OpenHarmony-compatible fork. The pub.dev package does not
-  # register an OHOS implementation, which leaves startup waiting forever on
-  # SharedPreferences.getInstance().
   shared_preferences:
     git:
       url: https://gitcode.com/CPF-Flutter/flutter_packages.git
       ref: br_shared_preferences-v2.3.2_ohos
       path: packages/shared_preferences/shared_preferences
-  # Native OpenHarmony implementation. Using the regular pub.dev sqflite on
-  # OHOS leaves sqflite_common.databaseFactory uninitialized at runtime.
   sqflite:
     git:
       url: https://gitcode.com/CPF-Flutter/flutter_sqflite.git
@@ -62,7 +57,7 @@ flutter:
   assets:
     - assets/fonts/OFL.txt
     - assets/app_icon/app_logo.jpg
-    - assets/app_icon/flycode_harmony_icon.png
+    - assets/app_icon/harmony_icon.jpg
   fonts:
     - family: Inter
       fonts:
