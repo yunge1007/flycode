@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -28,12 +29,21 @@ class MyApp extends ConsumerStatefulWidget {
 class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
   final GoRouter _router = appRouter;
 
+  bool get _supportsLocalNotifications {
+    if (kIsWeb) return false;
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS;
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    unawaited(_ensureNotificationPermissionOnStartup());
+    if (_supportsLocalNotifications) {
+      unawaited(_ensureNotificationPermissionOnStartup());
+    }
   }
 
   Future<void> _ensureNotificationPermissionOnStartup() async {
@@ -63,6 +73,7 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
     ref.listen<SessionCompletionNotificationMode>(
       sessionCompletionNotificationModeProvider,
       (previous, next) {
+        if (!_supportsLocalNotifications) return;
         if (next == SessionCompletionNotificationMode.none) return;
         unawaited(
           ref.read(localNotificationServiceProvider).ensurePermissionPrompted(),
