@@ -75,32 +75,14 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
-
           app = Path('ohos/AppScope/app.json5')
           s = app.read_text()
-          s = re.sub(
-              r'(["\']?icon["\']?\s*:\s*)["\'][^"\']+["\']',
-              r'\1"$media:app_icon"',
-              s,
-              count=1,
-          )
+          s = re.sub(r'(["\']?icon["\']?\s*:\s*)["\'][^"\']+["\']', r'\1"$media:app_icon"', s, count=1)
           app.write_text(s)
-
           module = Path('ohos/entry/src/main/module.json5')
           s = module.read_text()
-          s = re.sub(
-              r'(["\']?icon["\']?\s*:\s*)["\'][^"\']+["\']',
-              r'\1"$media:icon"',
-              s,
-              count=1,
-          )
-          s = re.sub(
-              r'(["\']?startWindowIcon["\']?\s*:\s*)["\'][^"\']+["\']',
-              r'\1"$media:icon"',
-              s,
-              count=1,
-          )
-
+          s = re.sub(r'(["\']?icon["\']?\s*:\s*)["\'][^"\']+["\']', r'\1"$media:icon"', s, count=1)
+          s = re.sub(r'(["\']?startWindowIcon["\']?\s*:\s*)["\'][^"\']+["\']', r'\1"$media:icon"', s, count=1)
           if 'ohos.permission.INTERNET' not in s:
               m = re.search(r'(["\']?requestPermissions["\']?\s*:\s*\[)(.*?)(\])', s, re.S)
               perm = '{ "name": "ohos.permission.INTERNET" }'
@@ -119,7 +101,6 @@ jobs:
                   if not prefix.endswith(','):
                       prefix += ','
                   s = prefix + '\n    "requestPermissions": [\n      ' + perm + '\n    ]\n  ' + s[module_close:]
-
           module.write_text(s)
           print(app.read_text())
           print(module.read_text())
@@ -131,7 +112,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
-
           p = Path('ohos/build-profile.json5')
           s = p.read_text()
           for key in ('compileSdkVersion', 'compatibleSdkVersion', 'targetSdkVersion'):
@@ -155,7 +135,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
+          import re
           p = Path('lib/providers/session_provider.dart')
           s = p.read_text()
           needle = '      directory: directory,\n    );'
@@ -163,37 +143,16 @@ jobs:
           count = s.count(needle)
           if count < 2:
               raise RuntimeError(f'Expected at least two session message calls, found {count}')
-          s = s.replace(needle, replacement, 2)
-          p.write_text(s)
-
+          p.write_text(s.replace(needle, replacement, 2))
           h = Path('lib/providers/global_event/handlers.dart')
           hs = h.read_text()
-          old = '''    if (payload is! EventSessionCreated &&
-        payload is! EventSessionUpdated &&
-        payload is! EventSessionDeleted) {
-      return;
-    }
-
-    ref.invalidate(sessionsProvider);
-    ref.invalidate(allSessionsProvider);
-'''
-          new = '''    // session.updated can fire repeatedly while a conversation is streaming.
-    // Re-invalidating the root session list on every update can keep the chat
-    // bootstrap in AsyncLoading forever on slower mobile/OHOS clients.
-    if (payload is EventSessionUpdated) {
-      return;
-    }
-    if (payload is! EventSessionCreated && payload is! EventSessionDeleted) {
-      return;
-    }
-
-    ref.invalidate(sessionsProvider);
-    ref.invalidate(allSessionsProvider);
-'''
-          if old not in hs:
-              raise RuntimeError('Session update invalidation block not found')
-          h.write_text(hs.replace(old, new, 1))
-          print('Applied 100-message initial limit and disabled session.updated refresh loop')
+          pattern = re.compile(r"    if \(payload is! EventSessionCreated &&\n        payload is! EventSessionUpdated &&\n        payload is! EventSessionDeleted\) \{\n      return;\n    \}\n\n    ref\.invalidate\(sessionsProvider\);\n    ref\.invalidate\(allSessionsProvider\);\n")
+          replacement_handler = "    // Avoid an invalidation loop while an active conversation emits session.updated.\n    if (payload is EventSessionUpdated) {\n      return;\n    }\n    if (payload is! EventSessionCreated && payload is! EventSessionDeleted) {\n      return;\n    }\n\n    ref.invalidate(sessionsProvider);\n    ref.invalidate(allSessionsProvider);\n"
+          hs2, replaced = pattern.subn(replacement_handler, hs, count=1)
+          if replaced != 1:
+              raise RuntimeError(f'Expected one session invalidation block, replaced {replaced}')
+          h.write_text(hs2)
+          print('Applied chat stability patches')
           PY
 
       - name: Precache OHOS release engine
@@ -215,12 +174,10 @@ jobs:
           import os
           import tarfile
           from pathlib import Path
-
           har = Path(os.environ['FLUTTER_OHOS_EMBEDDING_HAR'])
           target = 'package/src/main/ets/plugin/editing/OhosAutoFillHelper.ets'
           members = []
           patched = False
-
           with tarfile.open(har, 'r:gz') as src:
               for member in src.getmembers():
                   f = src.extractfile(member) if member.isfile() else None
@@ -228,35 +185,19 @@ jobs:
                   if member.name == target:
                       text = data.decode('utf-8')
                       before = text
-                      type_map = {
-                          'autoFillManager.AutoFillType': 'number',
-                          'autoFillManager.ViewData': 'OhosViewData',
-                          'autoFillManager.AutoFillTriggerType': 'number',
-                          'autoFillManager.FillRequest': 'ESObject',
-                          'autoFillManager.AutoFillCallback': 'ESObject',
-                          'autoFillManager.FillFailureResult': 'ESObject',
-                          'autoFillManager.SaveRequest': 'ESObject',
-                      }
+                      type_map = {'autoFillManager.AutoFillType': 'number', 'autoFillManager.ViewData': 'OhosViewData', 'autoFillManager.AutoFillTriggerType': 'number', 'autoFillManager.FillRequest': 'ESObject', 'autoFillManager.AutoFillCallback': 'ESObject', 'autoFillManager.FillFailureResult': 'ESObject', 'autoFillManager.SaveRequest': 'ESObject'}
                       for old, new in type_map.items():
                           text = text.replace(old, new)
-                      text = text.replace(
-                          'autoFillManager.requestAutoFill(',
-                          '(autoFillManager as ESObject).requestAutoFill(',
-                      )
-                      text = text.replace(
-                          'autoFillManager.requestAutoSave(',
-                          '(autoFillManager as ESObject).requestAutoSave(',
-                      )
+                      text = text.replace('autoFillManager.requestAutoFill(', '(autoFillManager as ESObject).requestAutoFill(')
+                      text = text.replace('autoFillManager.requestAutoSave(', '(autoFillManager as ESObject).requestAutoSave(')
                       if text == before:
                           raise RuntimeError('Autofill helper found but no compatibility edits were applied')
                       data = text.encode('utf-8')
                       member.size = len(data)
                       patched = True
                   members.append((member, data))
-
           if not patched:
               raise RuntimeError(f'{target} not found in {har}')
-
           tmp = har.with_suffix(har.suffix + '.tmp')
           with tarfile.open(tmp, 'w:gz') as dst:
               for member, data in members:
@@ -282,10 +223,9 @@ jobs:
           import json
           import zipfile
           from pathlib import Path
-
           hap = Path('ohos/entry/build/default/outputs/default/entry-default-unsigned.hap')
           expected_icon = Path('/tmp/flycode_app_icon.png').read_bytes()
-
+          expected_hash = hashlib.sha256(expected_icon).hexdigest()
           with zipfile.ZipFile(hap) as z:
               module = json.loads(z.read('module.json'))
               names = set(z.namelist())
@@ -296,11 +236,8 @@ jobs:
               assert ability['startWindowIcon'] == '$media:icon', ability
               assert 'resources/base/media/app_icon.png' in names
               assert 'resources/base/media/icon.png' in names
-              app_icon = z.read('resources/base/media/app_icon.png')
-              entry_icon = z.read('resources/base/media/icon.png')
-              expected_hash = hashlib.sha256(expected_icon).hexdigest()
-              assert hashlib.sha256(app_icon).hexdigest() == expected_hash
-              assert hashlib.sha256(entry_icon).hexdigest() == expected_hash
+              assert hashlib.sha256(z.read('resources/base/media/app_icon.png')).hexdigest() == expected_hash
+              assert hashlib.sha256(z.read('resources/base/media/icon.png')).hexdigest() == expected_hash
               print(json.dumps(module, ensure_ascii=False, indent=2))
               print('Verified packaged launcher icon SHA256:', expected_hash)
           PY
