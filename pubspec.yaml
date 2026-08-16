@@ -2,7 +2,7 @@ name: flycode
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.1.0+3
+version: 1.1.0+4
 
 environment:
   sdk: ^3.11.0
@@ -27,7 +27,13 @@ dependencies:
       url: https://gitcode.com/CPF-Flutter/flutter_packages.git
       ref: br_shared_preferences-v2.3.2_ohos
       path: packages/shared_preferences/shared_preferences
-  sqflite: ^2.4.2
+  # Native OpenHarmony implementation. Using the regular pub.dev sqflite on
+  # OHOS leaves sqflite_common.databaseFactory uninitialized at runtime.
+  sqflite:
+    git:
+      url: https://gitcode.com/CPF-Flutter/flutter_sqflite.git
+      ref: br_v2.4.1_ohos
+      path: sqflite
   path: ^1.9.0
   flutter_markdown_plus: ^1.0.7
   markdown: ^7.3.0
@@ -56,6 +62,7 @@ flutter:
   assets:
     - assets/fonts/OFL.txt
     - assets/app_icon/app_logo.jpg
+    - assets/app_icon/flycode_harmony_icon.png
   fonts:
     - family: Inter
       fonts:
