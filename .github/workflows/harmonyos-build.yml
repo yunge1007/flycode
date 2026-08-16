@@ -22,15 +22,18 @@ jobs:
       FLUTTER_GIT_URL: https://gitcode.com/CPF-Flutter/flutter_flutter.git
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Set up HarmonyOS command line tools
         uses: ErBWs/setup-ohos@v1
         with:
           version: latest
           cache: true
+
       - name: Set up Flutter for OpenHarmony 3.41.9
         shell: bash
         run: |
@@ -38,6 +41,7 @@ jobs:
           git clone --depth 1 --branch oh-3.41.9-dev https://gitcode.com/CPF-Flutter/flutter_flutter.git "$GITHUB_WORKSPACE/flutter-ohos"
           git -C "$GITHUB_WORKSPACE/flutter-ohos" tag --force 3.41.9 HEAD
           echo "$GITHUB_WORKSPACE/flutter-ohos/bin" >> "$GITHUB_PATH"
+
       - name: Configure HarmonyOS npm registry
         run: |
           cat > "$HOME/.npmrc" <<'EOF'
@@ -45,49 +49,133 @@ jobs:
           @ohos:registry=https://repo.harmonyos.com/npm/
           strict-ssl=true
           EOF
+
       - name: Verify toolchain
         run: |
           flutter --version
           test -d "$HOS_SDK_HOME"
+
       - name: Generate OHOS project scaffold
         run: flutter create --platforms ohos --org io.flycode .
+
       - name: Target HarmonyOS 6.1.1 API 24
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
-          p=Path('ohos/build-profile.json5')
-          s=p.read_text()
-          for k in ('compileSdkVersion','compatibleSdkVersion','targetSdkVersion'):
-              pat=rf'(["\']?{k}["\']?\s*:\s*)(["\']?[^,\n}}]+["\']?)'
-              if re.search(pat,s): s=re.sub(pat,rf'\1"6.1.1(24)"',s,count=1)
+
+          p = Path('ohos/build-profile.json5')
+          s = p.read_text()
+          for key in ('compileSdkVersion', 'compatibleSdkVersion', 'targetSdkVersion'):
+              pattern = rf'(["\']?{key}["\']?\s*:\s*)(["\']?[^,\n}}]+["\']?)'
+              if re.search(pattern, s):
+                  s = re.sub(pattern, rf'\1"6.1.1(24)"', s, count=1)
               else:
-                  m=re.search(r'(["\']?name["\']?\s*:\s*["\']default["\']\s*,)',s)
-                  s=s[:m.end()]+f'\n        "{k}": "6.1.1(24)",'+s[m.end():]
+                  marker = re.search(r'(["\']?name["\']?\s*:\s*["\']default["\']\s*,)', s)
+                  if marker is None:
+                      raise RuntimeError(f'Cannot add {key}: default product not found')
+                  s = s[:marker.end()] + f'\n        "{key}": "6.1.1(24)",' + s[marker.end():]
           p.write_text(s)
           print(s)
           PY
+
       - name: Resolve Dart dependencies
         run: flutter pub get
-      - name: Inspect Flutter OHOS Autofill integration
+
+      - name: Precache OHOS release engine
         shell: bash
         run: |
           set -euxo pipefail
-          cd ohos
-          ohpm install
-          HELPER=$(find oh_modules -path '*flutter_ohos*/src/main/ets/plugin/editing/OhosAutoFillHelper.ets' -print -quit)
-          test -n "$HELPER"
-          echo "HELPER=$HELPER"
-          echo '===== OhosAutoFillHelper.ets ====='
-          sed -n '1,680p' "$HELPER"
-          echo '===== references ====='
-          grep -R -n -E 'OhosAutoFillHelper|ohosAutoFillHelper|autoFillHelper' "$(dirname "$HELPER")"/../.. | head -200 || true
+          flutter precache --ohos
+          HAR="$GITHUB_WORKSPACE/flutter-ohos/bin/cache/artifacts/engine/ohos-arm64-release/flutter_embedding_release.har"
+          test -f "$HAR"
+          echo "FLUTTER_OHOS_EMBEDDING_HAR=$HAR" >> "$GITHUB_ENV"
+          ls -lh "$HAR"
+
+      - name: Patch Flutter OHOS Autofill compatibility
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import io
+          import os
+          import tarfile
+          from pathlib import Path
+
+          har = Path(os.environ['FLUTTER_OHOS_EMBEDDING_HAR'])
+          target = 'package/src/main/ets/plugin/editing/OhosAutoFillHelper.ets'
+          members = []
+          patched = False
+
+          with tarfile.open(har, 'r:gz') as src:
+              for member in src.getmembers():
+                  f = src.extractfile(member) if member.isfile() else None
+                  data = f.read() if f else b''
+                  if member.name == target:
+                      text = data.decode('utf-8')
+                      before = text
+
+                      # The 3.41.9 beta embedding references newer strongly typed
+                      # Autofill declarations than the current HarmonyOS SDK exports.
+                      type_map = {
+                          'autoFillManager.AutoFillType': 'number',
+                          'autoFillManager.ViewData': 'OhosViewData',
+                          'autoFillManager.AutoFillTriggerType': 'number',
+                          'autoFillManager.FillRequest': 'ESObject',
+                          'autoFillManager.AutoFillCallback': 'ESObject',
+                          'autoFillManager.FillFailureResult': 'ESObject',
+                          'autoFillManager.SaveRequest': 'ESObject',
+                      }
+                      for old, new in type_map.items():
+                          text = text.replace(old, new)
+
+                      text = text.replace(
+                          'autoFillManager.requestAutoFill(',
+                          '(autoFillManager as ESObject).requestAutoFill(',
+                      )
+                      text = text.replace(
+                          'autoFillManager.requestAutoSave(',
+                          '(autoFillManager as ESObject).requestAutoSave(',
+                      )
+
+                      if text == before:
+                          raise RuntimeError('Autofill helper found but no compatibility edits were applied')
+                      data = text.encode('utf-8')
+                      member.size = len(data)
+                      patched = True
+                      print('Patched', target)
+                      print('Remaining typed autoFillManager references:', text.count('autoFillManager.'))
+
+                  members.append((member, data))
+
+          if not patched:
+              raise RuntimeError(f'{target} not found in {har}')
+
+          tmp = har.with_suffix(har.suffix + '.tmp')
+          with tarfile.open(tmp, 'w:gz') as dst:
+              for member, data in members:
+                  if member.isfile():
+                      dst.addfile(member, io.BytesIO(data))
+                  else:
+                      dst.addfile(member)
+          tmp.replace(har)
+
+          # Verify the patched member can be read back from the HAR.
+          with tarfile.open(har, 'r:gz') as check:
+              text = check.extractfile(target).read().decode('utf-8')
+              assert 'autoFillManager.AutoFillType' not in text
+              assert '(autoFillManager as ESObject).requestAutoFill(' in text
+              print('Autofill HAR patch verified')
+          PY
+
       - name: Build ARM64 release HAP
         run: flutter build hap --release --target-platform ohos-arm64
+
       - name: Locate HAP
         if: always()
         run: find ohos -type f \( -name '*.hap' -o -name '*.app' \) -print 2>/dev/null || true
+
       - name: Upload HAP artifact
         if: success()
         uses: actions/upload-artifact@v4
