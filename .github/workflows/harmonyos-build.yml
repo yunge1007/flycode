@@ -52,13 +52,13 @@ jobs:
           strict-ssl=true
           EOF
 
-      - name: Diagnose toolchain
+      - name: Verify HarmonyOS Flutter toolchain
         shell: bash
         run: |
           set -euxo pipefail
           flutter --version
-          flutter doctor -v || true
-          env | sort | grep -E 'OHOS|HARMONY|DEVECO|TOOL_HOME|SDK|FLUTTER' || true
+          test -d "$HOS_SDK_HOME"
+          test -x "$HOS_SDK_HOME/../bin/hvigorw" || command -v hvigorw || true
 
       - name: Generate OHOS project scaffold
         shell: bash
