@@ -69,6 +69,37 @@ jobs:
           set -euxo pipefail
           flutter create --platforms ohos --org io.flycode .
 
+      - name: Target HarmonyOS 6.1.1 API 24
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('ohos/build-profile.json5')
+          s = p.read_text()
+          print('--- build-profile before ---')
+          print(s)
+
+          def replace_or_add(text, key, value):
+              pattern = rf'(["\']?{key}["\']?\s*:\s*)(["\']?[^,\n}}]+["\']?)'
+              if re.search(pattern, text):
+                  return re.sub(pattern, rf'\1"{value}"', text, count=1)
+              marker = re.search(r'(["\']?name["\']?\s*:\s*["\']default["\']\s*,)', text)
+              if not marker:
+                  raise RuntimeError(f'Could not locate default product to add {key}')
+              pos = marker.end()
+              return text[:pos] + f'\n        "{key}": "{value}",' + text[pos:]
+
+          for key in ('compileSdkVersion', 'compatibleSdkVersion', 'targetSdkVersion'):
+              s = replace_or_add(s, key, '6.1.1(24)')
+
+          p.write_text(s)
+          print('--- build-profile after ---')
+          print(s)
+          PY
+
       - name: Resolve Dart dependencies
         shell: bash
         run: |
