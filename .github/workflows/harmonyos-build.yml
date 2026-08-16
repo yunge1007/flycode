@@ -6,6 +6,10 @@ on:
       - harmonyos
   workflow_dispatch:
 
+concurrency:
+  group: harmonyos-hap-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -58,7 +62,6 @@ jobs:
           set -euxo pipefail
           flutter --version
           test -d "$HOS_SDK_HOME"
-          test -x "$HOS_SDK_HOME/../bin/hvigorw" || command -v hvigorw || true
 
       - name: Generate OHOS project scaffold
         shell: bash
