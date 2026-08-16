@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          git clone --branch oh-3.41.9-dev https://gitcode.com/CPF-Flutter/flutter_flutter.git "$GITHUB_WORKSPACE/flutter-ohos"
+          git clone --depth 1 --branch oh-3.41.9-dev https://gitcode.com/CPF-Flutter/flutter_flutter.git "$GITHUB_WORKSPACE/flutter-ohos"
           git -C "$GITHUB_WORKSPACE/flutter-ohos" tag --force 3.41.9 HEAD
           echo "$GITHUB_WORKSPACE/flutter-ohos/bin" >> "$GITHUB_PATH"
 
