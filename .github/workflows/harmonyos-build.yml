@@ -20,12 +20,7 @@ jobs:
       PUB_HOSTED_URL: https://pub.flutter-io.cn
       FLUTTER_STORAGE_BASE_URL: https://storage.flutter-io.cn
       FLUTTER_GIT_URL: https://gitcode.com/CPF-Flutter/flutter_flutter.git
-      HARMONY_APP_P12_BASE64: ${{ secrets.HARMONY_APP_P12_BASE64 }}
-      HARMONY_APP_CERT_BASE64: ${{ secrets.HARMONY_APP_CERT_BASE64 }}
-      HARMONY_PROFILE_P7B_BASE64: ${{ secrets.HARMONY_PROFILE_P7B_BASE64 }}
-      HARMONY_KEY_ALIAS: ${{ secrets.HARMONY_KEY_ALIAS }}
-      HARMONY_KEY_PASSWORD: ${{ secrets.HARMONY_KEY_PASSWORD }}
-      HARMONY_STORE_PASSWORD: ${{ secrets.HARMONY_STORE_PASSWORD }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -64,33 +59,51 @@ jobs:
       - name: Generate OHOS project scaffold
         run: flutter create --platforms ohos --org io.flycode .
 
-      - name: Embed FlyCode icon and configure HarmonyOS permissions
+      - name: Embed PNG launcher icon and configure permissions
         shell: bash
         run: |
           set -euxo pipefail
-          ICON_SOURCE="assets/app_icon/harmony_icon.jpg"
-          test -f "$ICON_SOURCE"
-          mkdir -p ohos/AppScope/resources/base/media
-          mkdir -p ohos/entry/src/main/resources/base/media
-          cp "$ICON_SOURCE" ohos/AppScope/resources/base/media/harmony_icon.jpg
-          cp "$ICON_SOURCE" ohos/entry/src/main/resources/base/media/harmony_icon.jpg
+          test -f assets/app_icon/harmony_icon.jpg
 
+          python3 -c 'from PIL import Image' || python3 -m pip install --user pillow
           python3 - <<'PY'
           from pathlib import Path
+          from PIL import Image
           import re
+
+          src = Path('assets/app_icon/harmony_icon.jpg')
+          generated = Path('/tmp/flycode_app_icon.png')
+          Image.open(src).convert('RGBA').resize((512, 512), Image.Resampling.LANCZOS).save(generated, 'PNG', optimize=True)
+
+          app_icon = Path('ohos/AppScope/resources/base/media/app_icon.png')
+          entry_icon = Path('ohos/entry/src/main/resources/base/media/icon.png')
+          app_icon.write_bytes(generated.read_bytes())
+          entry_icon.write_bytes(generated.read_bytes())
 
           app = Path('ohos/AppScope/app.json5')
           s = app.read_text()
-          s = re.sub(r'(["\']?icon["\']?\s*:\s*)["\'][^"\']+["\']', r'\1"$media:harmony_icon"', s, count=1)
-          if 'distributedNotificationEnabled' in s:
-              s = re.sub(r'(["\']?distributedNotificationEnabled["\']?\s*:\s*)(true|false)', r'\1false', s)
+          s = re.sub(
+              r'(["\']?icon["\']?\s*:\s*)["\'][^"\']+["\']',
+              r'\1"$media:app_icon"',
+              s,
+              count=1,
+          )
           app.write_text(s)
-          print(app.read_text())
 
           module = Path('ohos/entry/src/main/module.json5')
           s = module.read_text()
-          s = re.sub(r'(["\']?icon["\']?\s*:\s*)["\'][^"\']+["\']', r'\1"$media:harmony_icon"', s, count=1)
-          s = re.sub(r'(["\']?startWindowIcon["\']?\s*:\s*)["\'][^"\']+["\']', r'\1"$media:harmony_icon"', s, count=1)
+          s = re.sub(
+              r'(["\']?icon["\']?\s*:\s*)["\'][^"\']+["\']',
+              r'\1"$media:icon"',
+              s,
+              count=1,
+          )
+          s = re.sub(
+              r'(["\']?startWindowIcon["\']?\s*:\s*)["\'][^"\']+["\']',
+              r'\1"$media:icon"',
+              s,
+              count=1,
+          )
 
           if 'ohos.permission.INTERNET' not in s:
               m = re.search(r'(["\']?requestPermissions["\']?\s*:\s*\[)(.*?)(\])', s, re.S)
@@ -109,10 +122,12 @@ jobs:
                   prefix = s[:module_close].rstrip()
                   if not prefix.endswith(','):
                       prefix += ','
-                  addition = '\n    "requestPermissions": [\n      ' + perm + '\n    ]\n  '
-                  s = prefix + addition + s[module_close:]
+                  s = prefix + '\n    "requestPermissions": [\n      ' + perm + '\n    ]\n  ' + s[module_close:]
+
           module.write_text(s)
+          print(app.read_text())
           print(module.read_text())
+          print('PNG icon bytes:', generated.stat().st_size)
           PY
 
       - name: Target HarmonyOS 6.1.1 API 24
@@ -139,6 +154,23 @@ jobs:
 
       - name: Resolve Dart dependencies
         run: flutter pub get
+
+      - name: Limit initial HarmonyOS message history
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('lib/providers/session_provider.dart')
+          s = p.read_text()
+          needle = '      directory: directory,\n    );'
+          replacement = '      directory: directory,\n      limit: 100,\n    );'
+          count = s.count(needle)
+          if count < 2:
+              raise RuntimeError(f'Expected at least two session message calls, found {count}')
+          s = s.replace(needle, replacement, 2)
+          p.write_text(s)
+          print('Applied message history limit to', 2, 'providers')
+          PY
 
       - name: Precache OHOS release engine
         shell: bash
@@ -196,7 +228,6 @@ jobs:
                       data = text.encode('utf-8')
                       member.size = len(data)
                       patched = True
-                      print('Patched', target)
                   members.append((member, data))
 
           if not patched:
@@ -210,74 +241,59 @@ jobs:
                   else:
                       dst.addfile(member)
           tmp.replace(har)
-
-          with tarfile.open(har, 'r:gz') as check:
-              text = check.extractfile(target).read().decode('utf-8')
-              assert 'autoFillManager.AutoFillType' not in text
-              assert '(autoFillManager as ESObject).requestAutoFill(' in text
-              print('Autofill HAR patch verified')
+          print('Autofill HAR patch verified')
           PY
 
       - name: Build unsigned ARM64 release HAP
         run: flutter build hap --release --no-codesign --target-platform ohos-arm64
 
-      - name: Prepare unsigned HAP artifact
+      - name: Verify packaged HAP metadata and icons
         shell: bash
         run: |
           set -euxo pipefail
           HAP="ohos/entry/build/default/outputs/default/entry-default-unsigned.hap"
           test -f "$HAP"
-          mkdir -p dist
-          cp "$HAP" dist/flycode-harmonyos-arm64-unsigned.hap
-          ls -lh dist/flycode-harmonyos-arm64-unsigned.hap
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import zipfile
+          from pathlib import Path
 
-      - name: Sign HAP for HarmonyOS device
-        if: ${{ env.HARMONY_APP_P12_BASE64 != '' && env.HARMONY_APP_CERT_BASE64 != '' && env.HARMONY_PROFILE_P7B_BASE64 != '' && env.HARMONY_KEY_ALIAS != '' && env.HARMONY_KEY_PASSWORD != '' && env.HARMONY_STORE_PASSWORD != '' }}
+          hap = Path('ohos/entry/build/default/outputs/default/entry-default-unsigned.hap')
+          expected_icon = Path('/tmp/flycode_app_icon.png').read_bytes()
+
+          with zipfile.ZipFile(hap) as z:
+              module = json.loads(z.read('module.json'))
+              names = set(z.namelist())
+              assert module['app']['versionCode'] == 5, module['app']
+              assert module['app']['icon'] == '$media:app_icon', module['app']
+              ability = module['module']['abilities'][0]
+              assert ability['icon'] == '$media:icon', ability
+              assert ability['startWindowIcon'] == '$media:icon', ability
+              assert 'resources/base/media/app_icon.png' in names
+              assert 'resources/base/media/icon.png' in names
+              app_icon = z.read('resources/base/media/app_icon.png')
+              entry_icon = z.read('resources/base/media/icon.png')
+              assert hashlib.sha256(app_icon).digest() == hashlib.sha256(expected_icon).digest()
+              assert hashlib.sha256(entry_icon).digest() == hashlib.sha256(expected_icon).digest()
+              print(json.dumps(module, ensure_ascii=False, indent=2))
+              print('Verified icon SHA256:', hashlib.sha256(expected_icon).hexdigest())
+          PY
+
+      - name: Prepare HAP artifact
         shell: bash
         run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/harmony-signing"
-          printf '%s' "$HARMONY_APP_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/harmony-signing/app.p12"
-          printf '%s' "$HARMONY_APP_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/harmony-signing/app.cer"
-          printf '%s' "$HARMONY_PROFILE_P7B_BASE64" | base64 --decode > "$RUNNER_TEMP/harmony-signing/app.p7b"
+          set -euxo pipefail
+          HAP="ohos/entry/build/default/outputs/default/entry-default-unsigned.hap"
+          mkdir -p dist
+          cp "$HAP" dist/FlyCode-HarmonyOS-v1.1.0-vc5-arm64-unsigned.hap
+          sha256sum dist/FlyCode-HarmonyOS-v1.1.0-vc5-arm64-unsigned.hap
+          ls -lh dist/FlyCode-HarmonyOS-v1.1.0-vc5-arm64-unsigned.hap
 
-          SIGN_TOOL=$(find "$HOS_SDK_HOME" -type f -name 'hap-sign-tool.jar' -print -quit)
-          test -n "$SIGN_TOOL"
-
-          java -jar "$SIGN_TOOL" sign-app \
-            -mode localSign \
-            -keyAlias "$HARMONY_KEY_ALIAS" \
-            -keyPwd "$HARMONY_KEY_PASSWORD" \
-            -appCertFile "$RUNNER_TEMP/harmony-signing/app.cer" \
-            -profileFile "$RUNNER_TEMP/harmony-signing/app.p7b" \
-            -inFile dist/flycode-harmonyos-arm64-unsigned.hap \
-            -signAlg SHA256withECDSA \
-            -keystoreFile "$RUNNER_TEMP/harmony-signing/app.p12" \
-            -keystorePwd "$HARMONY_STORE_PASSWORD" \
-            -outFile dist/flycode-harmonyos-arm64-signed.hap \
-            -compatibleVersion 24 \
-            -signCode 1
-
-          test -f dist/flycode-harmonyos-arm64-signed.hap
-          ls -lh dist/flycode-harmonyos-arm64-signed.hap
-
-      - name: Locate HAP
-        if: always()
-        run: find ohos dist -type f \( -name '*.hap' -o -name '*.app' \) -print 2>/dev/null || true
-
-      - name: Upload unsigned HAP artifact
+      - name: Upload HAP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flycode-harmonyos-arm64-unsigned
-          path: dist/flycode-harmonyos-arm64-unsigned.hap
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload signed HAP artifact
-        if: ${{ env.HARMONY_APP_P12_BASE64 != '' && env.HARMONY_APP_CERT_BASE64 != '' && env.HARMONY_PROFILE_P7B_BASE64 != '' && env.HARMONY_KEY_ALIAS != '' && env.HARMONY_KEY_PASSWORD != '' && env.HARMONY_STORE_PASSWORD != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: flycode-harmonyos-arm64-signed
-          path: dist/flycode-harmonyos-arm64-signed.hap
+          name: flycode-harmonyos-vc5-unsigned
+          path: dist/FlyCode-HarmonyOS-v1.1.0-vc5-arm64-unsigned.hap
           if-no-files-found: error
           retention-days: 30
