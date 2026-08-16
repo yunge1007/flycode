@@ -56,8 +56,15 @@ HomePagePresentationState buildHomePagePresentationState({
 }) {
   final sessionId = chatState.sessionId;
   final isPending = chatState.isPending;
-  final sessions = sessionsAsync.asData?.value;
-  final selectedSession = findSessionById(sessions, sessionId);
+
+  // Preserve the previous successful session list while Riverpod is refreshing
+  // it after session.updated SSE events. Using asData here discarded the
+  // previous value during refresh and made the chat body flip back to an
+  // endless loading spinner.
+  final sessions = sessionsAsync.value;
+  final matchedSession = findSessionById(sessions, sessionId);
+  final selectedSession = matchedSession ?? _fallbackSession(sessions, sessionId);
+
   final hasAnySessions = sessions?.isNotEmpty ?? false;
   final hasPermissionBlock = permissionRequest != null;
   final hasQuestion = questionRequest != null;
@@ -73,7 +80,7 @@ HomePagePresentationState buildHomePagePresentationState({
       HomePageBodyMode.loading,
     _ when selectedSession != null => HomePageBodyMode.messageList,
     _ when isPending => HomePageBodyMode.newSessionWelcome,
-    _ when sessionId != null => HomePageBodyMode.loading,
+    _ when sessionId != null => HomePageBodyMode.error,
     _ => HomePageBodyMode.sessionSelection,
   };
 
@@ -100,6 +107,24 @@ Session? findSessionById(List<Session>? sessions, String? sessionId) {
     }
   }
   return null;
+}
+
+Session? _fallbackSession(List<Session>? sessions, String? sessionId) {
+  if (sessionId == null || sessionId.isEmpty || sessions == null) return null;
+
+  // roots=true intentionally omits child/subagent sessions. If the UI already
+  // has a concrete session id, keep the chat usable even when that id is not in
+  // the roots list by creating a lightweight presentation fallback. Message
+  // loading still uses the real session id and the current project directory.
+  final reference = sessions.firstOrNull;
+  return Session(
+    id: sessionId,
+    slug: sessionId,
+    projectID: reference?.projectID ?? '',
+    directory: reference?.directory ?? '',
+    version: reference?.version ?? '',
+    time: SessionTime(created: 0, updated: 0),
+  );
 }
 
 Session? selectBootstrapSession(
