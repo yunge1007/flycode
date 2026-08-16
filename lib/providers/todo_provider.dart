@@ -1,6 +1,7 @@
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../service/api/models/global_event.dart' show Todo;
 import '../service/api/session_api.dart';
+import 'current_directory_provider.dart';
 
 part 'todo_provider.g.dart';
 
@@ -12,8 +13,9 @@ part 'todo_provider.g.dart';
 class SessionTodosNotifier extends _$SessionTodosNotifier {
   @override
   Future<List<Todo>> build(String sessionID) async {
+    final directory = ref.watch(currentDirectoryProvider);
     final api = await ref.read(sessionApiProvider.future);
-    return api.getSessionTodos(sessionID);
+    return api.getSessionTodos(sessionID, directory: directory);
   }
 
   /// SSE: todo.updated — 全量替换当前 todo 列表。
